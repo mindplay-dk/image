@@ -65,6 +65,9 @@ class Decoder extends \Intervention\Image\AbstractDecoder
         // reset image orientation
         $object->setImageOrientation(\Imagick::ORIENTATION_UNDEFINED);
 
+        // remove color profile, if present:
+        $this->removeColorProfile($object);
+
         return new Image(new Driver, $object);
     }
 
@@ -116,5 +119,57 @@ class Decoder extends \Intervention\Image\AbstractDecoder
         $object->destroy();
 
         return $imagick;
+    }
+
+    const ICC_SRGB = "sRGB_IEC61966-2-1_black_scaled.icc";
+    const ICC_CMYK = 'USWebCoatedSWOP.icc';
+
+    /**
+     * Remove any ICC color profile and convert to standard RGB color space
+     *
+     * @param  \Imagick $object
+     */
+    private function removeColorProfile(\Imagick $object)
+    {
+        try {
+            $colorspace = $object->getImageColorspace();
+
+            $profiles = $object->getImageProfiles("*", false);
+
+            $has_icc_profile = array_search('icc', $profiles) !== false;
+
+            if ($colorspace === \Imagick::COLORSPACE_CMYK) {
+                if (! $has_icc_profile) {
+                    $this->applyProfile($object, self::ICC_CMYK);
+                }
+
+                $this->convertToRGB($object);
+            } elseif ($colorspace !== \Imagick::COLORSPACE_GRAY) {
+                if ($has_icc_profile) {
+                    $this->convertToRGB($object);
+                }
+            }
+        } catch (\ImagickException $e) {
+            // as a last resort, remove unsupported or defective ICC profile:
+            try {
+                $object->removeImageProfile('icc');
+            } catch (\ImagickException $e) {
+                trigger_error($e->getMessage(), E_USER_WARNING);
+            }
+        }
+    }
+
+    private function convertToRGB(\Imagick $object)
+    {
+        $this->applyProfile($object, self::ICC_SRGB);
+
+        $object->setImageColorSpace(\Imagick::COLORSPACE_SRGB);
+    }
+
+    private function applyProfile(\Imagick $object, $profile_name)
+    {
+        $profile = file_get_contents(dirname(__DIR__, 4) . "/icc/" . $profile_name);
+
+        $object->profileImage('icc', $profile);
     }
 }
